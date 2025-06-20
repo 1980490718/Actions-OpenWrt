@@ -27,6 +27,7 @@ env:
   UPLOAD_FIRMWARE: true
   UPLOAD_RELEASE: true
   TZ: Asia/Shanghai
+  TOOLCHAIN_ARTIFACT_NAME_PREFIX: openwrt-toolchain-
 
 jobs:
   build:
@@ -57,35 +58,12 @@ jobs:
         path: /workdir/openwrt
         key: ${{ runner.os }}-openwrt-source-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default', '**/*.config', '**/diy-part1.sh', '**/diy-part2.sh') }}
 
-    - name: 📥 Clone Source Code
-      working-directory: /workdir
-      if: steps.cache-source.outputs.cache-hit != 'true'
-      run: |
-        df -hT $PWD
-        git clone $REPO_URL -b $REPO_BRANCH openwrt
-        ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
-
     - name: 💾 Cache Feeds
       id: cache-feeds
       uses: actions/cache@v3
       with:
         path: openwrt/feeds
         key: ${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default') }}
-
-    - name: 📦 Load Custom Feeds
-      run: |
-        [ -e $FEEDS_CONF ] && mv $FEEDS_CONF openwrt/feeds.conf.default
-        chmod +x $DIY_P1_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P1_SH
-
-    - name: 🔄 Update Feeds
-      if: steps.cache-feeds.outputs.cache-hit != 'true'
-      run: cd openwrt && ./scripts/feeds update -a
-
-    - name: 📦 Install Feeds
-      if: steps.cache-feeds.outputs.cache-hit != 'true'
-      run: cd openwrt && ./scripts/feeds install -a
 
     - name: 💾 Cache Downloaded Packages
       id: cache-packages
@@ -94,30 +72,47 @@ jobs:
         path: openwrt/dl
         key: ${{ runner.os }}-openwrt-packages-${{ env.REPO_BRANCH }}-${{ hashFiles('**/*.config') }}
 
-    - name: ⚙️ Load Configuration
-      run: |
-        [ -e files ] && mv files openwrt/files
-        [ -e $CONFIG_FILE ] && mv $CONFIG_FILE openwrt/.config
-        chmod +x $DIY_P2_SH
-        cd openwrt
-        $GITHUB_WORKSPACE/$DIY_P2_SH
-
-    - name: 📦 Download Packages
-      id: package
-      if: steps.cache-packages.outputs.cache-hit != 'true'
-      run: |
-        cd openwrt
-        make defconfig
-        make download -j8
-        find dl -size -1024c -exec ls -l {} \;
-        find dl -size -1024c -exec rm -f {} \;
-
     - name: 💾 Cache Compiled Objects
       id: cache-objects
       uses: actions/cache@v3
       with:
         path: openwrt/build_dir
         key: ${{ runner.os }}-openwrt-objects-${{ env.REPO_BRANCH }}-${{ hashFiles('**/*.config') }}
+
+    - name: 💾 Cache Toolchain
+      id: cache-toolchain
+      uses: actions/cache@v3
+      with:
+        path: openwrt/staging_dir
+        key: ${{ runner.os }}-openwrt-toolchain-${{ env.REPO_BRANCH }}-${{ hashFiles('**/*.config') }}
+
+    - name: 🔍 Check for Toolchain in Releases
+      if: steps.cache-toolchain.outputs.cache-hit != 'true'
+      id: check-toolchain-release
+      run: |
+        TOOLCHAIN_ARTIFACT_NAME="${{ env.TOOLCHAIN_ARTIFACT_NAME_PREFIX }}${{ env.REPO_BRANCH }}-${{ hashFiles('**/*.config') }}"
+        RELEASES=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ github.repository }}/releases)
+        if echo "$RELEASES" | grep -q "$TOOLCHAIN_ARTIFACT_NAME"; then
+          echo "toolchain_found=true" >> $GITHUB_OUTPUT
+        else
+          echo "toolchain_found=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: 📥 Download Toolchain from Releases
+      if: steps.cache-toolchain.outputs.cache-hit != 'true' && steps.check-toolchain-release.outputs.toolchain_found == 'true'
+      run: |
+        TOOLCHAIN_ARTIFACT_NAME="${{ env.TOOLCHAIN_ARTIFACT_NAME_PREFIX }}${{ env.REPO_BRANCH }}-${{ hashFiles('**/*.config') }}"
+        RELEASE_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ github.repository }}/releases | jq -r '.[] | select(.name | contains("'"$TOOLCHAIN_ARTIFACT_NAME"'")) | .id')
+        ASSET_ID=$(curl -s -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID/assets | jq -r '.[] | select(.name | contains("toolchain.tar.gz")) | .id')
+        curl -L -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" -H "Accept: application/octet-stream" https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID -o toolchain.tar.gz
+        tar -xzvf toolchain.tar.gz -C openwrt
+
+    - name: 🔨 Compile Toolchain
+      if: steps.cache-toolchain.outputs.cache-hit != 'true' && steps.check-toolchain-release.outputs.toolchain_found == 'false'
+      run: |
+        cd openwrt
+        make defconfig
+        make toolchain/install -j$(nproc) || make toolchain/install -j1 || make toolchain/install -j1 V=s
 
     - name: 🔨 Compile Firmware
       id: compile
@@ -129,6 +124,21 @@ jobs:
         grep '^CONFIG_TARGET.*DEVICE.*=y' .config | sed -r 's/.*DEVICE_(.*)=y/\1/' > DEVICE_NAME
         [ -s DEVICE_NAME ] && echo "DEVICE_NAME=_$(cat DEVICE_NAME)" >> $GITHUB_ENV
         echo "FILE_DATE=_$(date +"%Y%m%d%H%M")" >> $GITHUB_ENV
+
+    - name: 📦 Package Toolchain
+      run: |
+        cd openwrt
+        tar -czvf toolchain.tar.gz staging_dir
+
+    - name: 🚀 Upload Toolchain to Release
+      uses: softprops/action-gh-release@master
+      if: steps.compile.outputs.status == 'success' && env.UPLOAD_RELEASE == 'true'
+      env:
+        GITHUB_TOKEN: ${{ secrets.WILLEM666 }}
+      with:
+        tag_name: ${{ env.TOOLCHAIN_ARTIFACT_NAME_PREFIX }}${{ env.REPO_BRANCH }}-${{ hashFiles('**/*.config') }}
+        name: ${{ env.TOOLCHAIN_ARTIFACT_NAME_PREFIX }}${{ env.REPO_BRANCH }}-${{ hashFiles('**/*.config') }}
+        files: openwrt/toolchain.tar.gz
 
     - name: 📊 Check Space Usage
       if: (!cancelled())
