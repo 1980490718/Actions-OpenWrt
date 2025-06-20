@@ -50,12 +50,27 @@ jobs:
         sudo mkdir -p /workdir
         sudo chown $USER:$GROUPS /workdir
 
+    - name: 💾 Cache OpenWrt Source
+      id: cache-source
+      uses: actions/cache@v3
+      with:
+        path: /workdir/openwrt
+        key: ${{ runner.os }}-openwrt-source-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default', '**/*.config', '**/diy-part1.sh', '**/diy-part2.sh') }}
+
     - name: 📥 Clone Source Code
       working-directory: /workdir
+      if: steps.cache-source.outputs.cache-hit != 'true'
       run: |
         df -hT $PWD
         git clone $REPO_URL -b $REPO_BRANCH openwrt
         ln -sf /workdir/openwrt $GITHUB_WORKSPACE/openwrt
+
+    - name: 💾 Cache Feeds
+      id: cache-feeds
+      uses: actions/cache@v3
+      with:
+        path: openwrt/feeds
+        key: ${{ runner.os }}-openwrt-feeds-${{ env.REPO_BRANCH }}-${{ hashFiles('**/feeds.conf.default') }}
 
     - name: 📦 Load Custom Feeds
       run: |
@@ -65,10 +80,19 @@ jobs:
         $GITHUB_WORKSPACE/$DIY_P1_SH
 
     - name: 🔄 Update Feeds
+      if: steps.cache-feeds.outputs.cache-hit != 'true'
       run: cd openwrt && ./scripts/feeds update -a
 
     - name: 📦 Install Feeds
+      if: steps.cache-feeds.outputs.cache-hit != 'true'
       run: cd openwrt && ./scripts/feeds install -a
+
+    - name: 💾 Cache Downloaded Packages
+      id: cache-packages
+      uses: actions/cache@v3
+      with:
+        path: openwrt/dl
+        key: ${{ runner.os }}-openwrt-packages-${{ env.REPO_BRANCH }}-${{ hashFiles('**/*.config') }}
 
     - name: ⚙️ Load Configuration
       run: |
@@ -80,12 +104,20 @@ jobs:
 
     - name: 📦 Download Packages
       id: package
+      if: steps.cache-packages.outputs.cache-hit != 'true'
       run: |
         cd openwrt
         make defconfig
         make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
+
+    - name: 💾 Cache Compiled Objects
+      id: cache-objects
+      uses: actions/cache@v3
+      with:
+        path: openwrt/build_dir
+        key: ${{ runner.os }}-openwrt-objects-${{ env.REPO_BRANCH }}-${{ hashFiles('**/*.config') }}
 
     - name: 🔨 Compile Firmware
       id: compile
