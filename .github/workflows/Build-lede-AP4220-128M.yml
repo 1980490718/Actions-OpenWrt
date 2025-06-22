@@ -93,6 +93,7 @@ jobs:
       with:
         path: |
           /workdir/openwrt/staging_dir/toolchain-*
+          /workdir/openwrt/staging_dir/target-*
           /workdir/openwrt/dl
           /workdir/openwrt/build_dir
         key: ${{ runner.os }}-toolchain-${{ hashFiles('/workdir/openwrt/feeds.conf.default', '/workdir/openwrt/.config') }}
