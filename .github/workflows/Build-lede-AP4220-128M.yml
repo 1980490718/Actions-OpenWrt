@@ -78,6 +78,18 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
+    - name: 🗃️ Cache OpenWrt Toolchain
+      id: cache-toolchain
+      uses: actions/cache@v3
+      with:
+        path: |
+          /workdir/openwrt/staging_dir/toolchain-*
+          /workdir/openwrt/staging_dir/target-*
+        key: ${{ runner.os }}-toolchain-${{ hashFiles('openwrt/Makefile', 'openwrt/scripts/feeds') }}-${{ hashFiles('openwrt/feeds.conf.default', 'openwrt/.config') }}
+        restore-keys: |
+          ${{ runner.os }}-toolchain-${{ hashFiles('openwrt/Makefile', 'openwrt/scripts/feeds') }}-
+          ${{ runner.os }}-toolchain-
+
     - name: 📦 Download Packages
       id: package
       run: |
@@ -86,22 +98,6 @@ jobs:
         make download -j$(nproc) || make download -j1 || make download -j1 V=s
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
-
-    - name: 🗃️ Cache OpenWrt Toolchain
-      id: cache-toolchain
-      uses: actions/cache@v3
-      with:
-        path: |
-          /workdir/openwrt/staging_dir/toolchain-*
-          /workdir/openwrt/staging_dir/target-*
-          /workdir/openwrt/staging_dir/host
-          /workdir/openwrt/staging_dir/hostpkg
-          /workdir/openwrt/staging_dir/packages
-          /workdir/openwrt/dl
-          /workdir/openwrt/build_dir
-        key: ${{ runner.os }}-toolchain-${{ hashFiles('/workdir/openwrt/feeds.conf.default', '/workdir/openwrt/.config') }}
-        restore-keys: |
-          ${{ runner.os }}-toolchain-
 
     - name: 🔨 Compile Firmware
       id: compile
