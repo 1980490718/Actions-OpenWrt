@@ -78,24 +78,12 @@ jobs:
         cd openwrt
         $GITHUB_WORKSPACE/$DIY_P2_SH
 
-    - name: 🗃️ Cache OpenWrt Toolchain
-      id: cache-toolchain
-      uses: actions/cache@v3
-      with:
-        path: |
-          /workdir/openwrt/staging_dir/toolchain-*
-          /workdir/openwrt/staging_dir/target-*
-        key: ${{ runner.os }}-toolchain-${{ hashFiles('openwrt/Makefile', 'openwrt/scripts/feeds') }}-${{ hashFiles('openwrt/feeds.conf.default', 'openwrt/.config') }}
-        restore-keys: |
-          ${{ runner.os }}-toolchain-${{ hashFiles('openwrt/Makefile', 'openwrt/scripts/feeds') }}-
-          ${{ runner.os }}-toolchain-
-
     - name: 📦 Download Packages
       id: package
       run: |
         cd openwrt
         make defconfig
-        make download -j$(nproc) || make download -j1 || make download -j1 V=s
+        make download -j8
         find dl -size -1024c -exec ls -l {} \;
         find dl -size -1024c -exec rm -f {} \;
 
@@ -130,19 +118,12 @@ jobs:
         echo "FIRMWARE=$PWD" >> $GITHUB_ENV
         echo "status=success" >> $GITHUB_OUTPUT
 
-    - name: 🗜️ Compress Firmware with ZIP (Ultra Compression)
-      if: steps.organize.outputs.status == 'success' && !cancelled()
-      run: |
-        cd ${{ env.FIRMWARE }}
-        zip -r9 LEDE_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}.zip .
-        echo "ZIP_FILE=$PWD/LEDE_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}.zip" >> $GITHUB_ENV
-
     - name: 📤 Upload Firmware
       uses: actions/upload-artifact@main
       if: steps.organize.outputs.status == 'success' && !cancelled()
       with:
-        name: LEDE_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
-        path: ${{ env.ZIP_FILE }}
+        name: OpenWrt_firmware${{ env.DEVICE_NAME }}${{ env.FILE_DATE }}
+        path: ${{ env.FIRMWARE }}
 
     - name: 🏷️ Generate Release Tag
       id: tag
@@ -161,19 +142,19 @@ jobs:
       with:
         tag_name: ${{ steps.tag.outputs.release_tag }}
         body_path: release.txt
-        files: ${{ env.ZIP_FILE }}
+        files: ${{ env.FIRMWARE }}/*
 
     - name: 🗑️ Delete Workflow Runs
       uses: Mattraks/delete-workflow-runs@main
       with:
         retain_days: 0
-        keep_minimum_runs: 5
+        keep_minimum_runs: 2
 
     - name: 🧹 Remove Old Releases
       uses: dev-drprasad/delete-older-releases@master
       if: env.UPLOAD_RELEASE == 'true' && !cancelled()
       with:
-        keep_latest: 10
+        keep_latest: 3
         delete_tags: true
       env:
         GITHUB_TOKEN: ${{ secrets.WILLEM666 }}
